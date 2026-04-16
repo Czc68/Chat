@@ -299,7 +299,7 @@ function LoginPage() {
         localStorage.setItem('user', JSON.stringify(response.data.data));
         alert("登录成功！");
         // 跳转到聊天主页
-        window.location.href = '/index.html';
+        window.location.href = 'http://localhost:8080/index.html';
       } else {
         setError(response.data.msg || "登录失败，请检查用户名和密码");
         console.log("❌ Login failed:", response.data.msg);
