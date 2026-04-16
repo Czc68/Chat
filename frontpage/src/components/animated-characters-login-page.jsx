@@ -1,5 +1,4 @@
-
-"use client";;
+"use client";
 import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -7,6 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Eye, EyeOff, Mail, Sparkles } from "lucide-react";
 import axios from 'axios';
+import { Link } from "react-router-dom";
 axios.defaults.withCredentials = true;
 const Pupil = ({
   size = 12,
@@ -284,29 +284,36 @@ function LoginPage() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError("");
+
+    // 1. 前端校验：判断两次密码是否一致
+    if (password !== confirmPassword) {
+      setError("两次输入的密码不一致，请重新检查！");
+      return;
+    }
+
     setIsLoading(true);
-    
+
     try {
-      // 调用后端登录 API
-      const response = await axios.post('/api/auth/login', {
-        username: email,
-        password: password
+      // 2. 发送 POST 请求到后端 AuthController
+      // 后端接收 ChatUser 对象
+      const response = await axios.post('/api/auth/register', {
+        username: username,
+        nickname: nickname,
+        password: password,
+        tags: tags // 将画像标签传递给后端，存入数据库的 tags 字段
       });
-      
+
+      // 3. 根据后端返回的 CodeEnum 判断是否成功
       if (response.data.code === 200) {
-        console.log("✅ Login successful!", response.data);
-        // 登录成功，保存用户信息到 localStorage
-        localStorage.setItem('user', JSON.stringify(response.data.data));
-        alert("登录成功！");
-        // 跳转到聊天主页
-        window.location.href = 'http://localhost:8080/index.html';
+        console.log("✅ 注册成功!");
+        alert("账号创建成功！即将跳转到登录页面。");
+        window.location.href = '/login'; // 注册成功后跳转
       } else {
-        setError(response.data.msg || "登录失败，请检查用户名和密码");
-        console.log("❌ Login failed:", response.data.msg);
+        setError(response.data.desc || "注册失败，请稍后重试");
       }
     } catch (error) {
-      console.error("登录异常", error);
-      setError("网络错误，请稍后重试");
+      console.error("注册过程发生异常:", error);
+      setError("网络请求失败，请确保 Spring Boot 后端已启动且数据库连接正常");
     } finally {
       setIsLoading(false);
     }
@@ -627,9 +634,9 @@ function LoginPage() {
           {/* Sign Up Link */}
           <div className="text-center text-sm text-muted-foreground mt-8">
             Don't have an account?{" "}
-            <a href="#" className="text-foreground font-medium hover:underline">
+            <Link to="/register" className="text-foreground font-medium hover:underline">
               Sign Up
-            </a>
+            </Link>
           </div>
         </div>
       </div>

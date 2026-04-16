@@ -1,7 +1,9 @@
 package cn.xeblog.xechat.controller;
 
+import cn.xeblog.xechat.domain.vo.ResponseVO;
 import cn.xeblog.xechat.entity.ChatUser;
 import cn.xeblog.xechat.service.IUserService;
+import com.baomidou.mybatisplus.core.toolkit.StringUtils;
 import jakarta.annotation.Resource;
 import jakarta.servlet.http.HttpSession;
 import org.springframework.web.bind.annotation.*;
@@ -17,7 +19,7 @@ public class AuthController {
 
     @PostMapping("/login")
     public Map<String, Object> login(@RequestBody ChatUser loginInfo, HttpSession session) {
-        ChatUser user = userService.login(loginInfo.getUsername(), loginInfo.getPassword());
+        ChatUser user = userService.login(loginInfo.getEmail(), loginInfo.getPassword());
         if (user != null) {
             session.setAttribute("user", user);
             return Map.of("code", 200, "msg", "登录成功", "data", user);
@@ -26,10 +28,18 @@ public class AuthController {
     }
 
     @PostMapping("/register")
-    public Map<String, Object> register(@RequestBody ChatUser user) {
-        if (userService.register(user)) {
-            return Map.of("code", 200, "msg", "注册成功");
+    public ResponseVO register(@RequestBody ChatUser chatUser) {
+        // 检查 email 是否为空
+        if (StringUtils.isEmpty(chatUser.getEmail())) {
+            return ResponseVO.error("邮箱不能为空");
         }
-        return Map.of("code", 400, "msg", "注册失败，用户名可能已存在");
+
+        // 调用 service 检查邮箱是否存在
+        if (userService.checkEmailExists(chatUser.getEmail())) {
+            return ResponseVO.error("该邮箱已被注册");
+        }
+
+        // ... 保存逻辑
+        return userService.save(chatUser) ? ResponseVO.success() : ResponseVO.error("注册失败");
     }
 }

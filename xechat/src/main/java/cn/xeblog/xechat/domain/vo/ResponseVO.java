@@ -58,5 +58,32 @@ public class ResponseVO implements Serializable {
         this.desc = code.getDesc();
     }
 
+    // ==========================================
+    // 下面是你需要补充的静态辅助方法
+    // ==========================================
+
+    /**
+     * 响应成功 (无数据)
+     */
+    public static ResponseVO success() {
+        return new ResponseVO(SUCCESS);
+    }
+
+    /**
+     * 响应成功 (带数据)
+     */
+    public static ResponseVO success(Object data) {
+        return new ResponseVO(data);
+    }
+
+    /**
+     * 响应失败 (自定义错误提示)
+     */
+    public static ResponseVO error(String desc) {
+        // 默认使用 FAILED (503) 状态码，并覆盖为自定义的错误信息
+        ResponseVO responseVO = new ResponseVO(CodeEnum.FAILED);
+        responseVO.setDesc(desc);
+        return responseVO;
+    }
 
 }

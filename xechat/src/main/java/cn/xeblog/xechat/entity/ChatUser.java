@@ -12,7 +12,7 @@ import java.time.LocalDateTime;
 public class ChatUser {
     @TableId(type = IdType.AUTO)
     private Long id;
-    private String username;
+    private String email;
     @TableField(select = false)
     @JsonProperty(access =  JsonProperty.Access.WRITE_ONLY)// 仅允许写入（注册），禁止输出（登录返回）
     private String password;
