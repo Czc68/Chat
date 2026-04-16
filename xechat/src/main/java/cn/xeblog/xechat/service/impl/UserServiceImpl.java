@@ -12,10 +12,10 @@ import org.springframework.stereotype.Service;
 public class UserServiceImpl extends ServiceImpl<ChatUserMapper, ChatUser> implements IUserService {
 
     @Override
-    public ChatUser login(String username, String password) {
-        // 使用 LambdaQueryWrapper 避免硬编码字段名
+    public ChatUser login(String email, String password) {
+        // 入参改为 email，保持见名知意
         return this.getOne(new LambdaQueryWrapper<ChatUser>()
-                .eq(ChatUser::getEmail, username)
+                .eq(ChatUser::getEmail, email)
                 .eq(ChatUser::getPassword, password));
     }
 

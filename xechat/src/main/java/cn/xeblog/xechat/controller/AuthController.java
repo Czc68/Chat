@@ -9,7 +9,7 @@ import jakarta.servlet.http.HttpSession;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
-
+@CrossOrigin(origins = "http://localhost:5173", allowCredentials = "true")
 @RestController
 @RequestMapping("/api/auth")
 public class AuthController {
@@ -18,13 +18,28 @@ public class AuthController {
     private IUserService userService;
 
     @PostMapping("/login")
-    public Map<String, Object> login(@RequestBody ChatUser loginInfo, HttpSession session) {
-        ChatUser user = userService.login(loginInfo.getEmail(), loginInfo.getPassword());
-        if (user != null) {
-            session.setAttribute("user", user);
-            return Map.of("code", 200, "msg", "登录成功", "data", user);
+    public ResponseVO login(@RequestBody ChatUser loginInfo, HttpSession session) {
+        // 1. 简单校验前端传来的参数
+        if (loginInfo.getEmail() == null || loginInfo.getPassword() == null) {
+            return ResponseVO.error("邮箱或密码不能为空");
         }
-        return Map.of("code", 400, "msg", "用户名或密码错误");
+
+        // 2. 调用 service 进行登录验证
+        ChatUser user = userService.login(loginInfo.getEmail(), loginInfo.getPassword());
+
+        if (user != null) {
+            // 3. 登录成功，存入 session
+            session.setAttribute("user", user);
+
+            // 极其不建议把密码原样返回给前端！最好在返回前把密码置空
+            user.setPassword(null);
+
+            // 返回包含用户数据的成功响应
+            return ResponseVO.success(user);
+        }
+
+        // 4. 登录失败
+        return ResponseVO.error("邮箱或密码错误");
     }
 
     @PostMapping("/register")
