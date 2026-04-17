@@ -55,9 +55,17 @@ window.onbeforeunload = disconnect;
  * 连接服务器，订阅相关地址
  */
 function connect() {
-    var socket = new SockJS('/xechat');
-    stompClient = Stomp.over(socket);
+    var authUser = Cookies.getJSON("user");
+
+    if (!authUser) {
+        alert("请先登录！");
+        window.location.href = "/login.html"; // 跳回你的 React 登录页
+        return;
+    }
     // 配置stomp
+    user.userId = authUser.id;
+    user.username = authUser.nickname; // 这里对应你说的展示 nickname
+    user.avatar = authUser.avatar;
     config();
     // 订阅地址
     sub();

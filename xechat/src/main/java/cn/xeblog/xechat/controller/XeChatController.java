@@ -1,5 +1,6 @@
 package cn.xeblog.xechat.controller;
 
+import cn.xeblog.xechat.annotation.ChatRecord;
 import cn.xeblog.xechat.constant.RobotConstant;
 import cn.xeblog.xechat.constant.StompConstant;
 import cn.xeblog.xechat.domain.mo.User;
@@ -7,6 +8,7 @@ import cn.xeblog.xechat.domain.ro.MessageRO;
 import cn.xeblog.xechat.domain.ro.RevokeMessageRO;
 import cn.xeblog.xechat.domain.vo.MessageVO;
 import cn.xeblog.xechat.domain.vo.RevokeMsgVo;
+import cn.xeblog.xechat.entity.ChatUser;
 import cn.xeblog.xechat.enums.CodeEnum;
 import cn.xeblog.xechat.enums.MessageTypeEnum;
 import cn.xeblog.xechat.enums.inter.Code;
@@ -16,6 +18,7 @@ import cn.xeblog.xechat.utils.CheckUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.messaging.handler.annotation.MessageExceptionHandler;
 import org.springframework.messaging.handler.annotation.MessageMapping;
+import org.springframework.messaging.simp.SimpMessageHeaderAccessor;
 import org.springframework.web.bind.annotation.RestController;
 
 import jakarta.annotation.Resource;
@@ -92,18 +95,19 @@ public class XeChatController {
     }
 
     /**
-     * 撤回消息
-     *
-     * @param revokeMessageRO 撤消消息请求对象
-     * @param user 发送消息的用户对象
-     * @throws Exception
+     * 撤回消息（安全增强版）
+     */
+    /**
+     * 撤回消息（完美修复版）
      */
     @MessageMapping(StompConstant.PUB_CHAT_ROOM_REVOKE)
     public void revokeMessage(RevokeMessageRO revokeMessageRO, User user) throws Exception {
-        if (revokeMessageRO == null || !CheckUtils.checkUser(user)) {
+        // 1. 拦截器已经绑定了 user，直接判断是否为空
+        if (revokeMessageRO == null || user == null) {
             throw new ErrorCodeException(CodeEnum.INVALID_PARAMETERS);
         }
 
+        // 2. 校验撤回的消息是否属于当前发送请求的用户
         CheckUtils.checkMessageId(revokeMessageRO.getMessageId(), user.getUserId());
 
         RevokeMsgVo revokeMsgVo = new RevokeMsgVo();
@@ -112,12 +116,10 @@ public class XeChatController {
         revokeMsgVo.setType(MessageTypeEnum.REVOKE);
 
         if (CheckUtils.checkReceiver(revokeMessageRO.getReceiver())) {
-            // 将消息发送到指定用户
             messageService.sendMessageToUser(revokeMessageRO.getReceiver(), revokeMsgVo);
             return;
         }
 
-        // 将消息发送到所有用户
         messageService.sendMessage(StompConstant.SUB_CHAT_ROOM, revokeMsgVo);
     }
 

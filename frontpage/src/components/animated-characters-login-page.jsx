@@ -296,13 +296,18 @@ function LoginPage() {
       const response = await axios.post('/api/auth/login', {
         email: email,
         password: password,
-        rememberMe: rememberMe // 如果后端需要处理免登录，可以传过去
+        rememberMe: rememberMe
+      }, {
+        // 加上这个配置！否则后端 Session 无法保留，下次请求还是未登录状态
+        withCredentials: true
       });
 
       if (response.data.code === 200 || response.data.code === 0) {
         // 登录成功
         console.log("登录成功！", response.data);
 
+        // 👇👇👇 加上这一行！将后端返回的真实用户数据存入 localStorage 👇👇👇
+        localStorage.setItem("user", JSON.stringify(response.data.data));
         // 如果勾选了“记住我”，可以将账号存在本地 (仅作前端体验优化)
         if (rememberMe) {
           localStorage.setItem("rememberedEmail", email);

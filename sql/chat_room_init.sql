@@ -26,3 +26,10 @@ CREATE TABLE `chat_history`
     `content`     TEXT   NOT NULL COMMENT '消息内容',
     `create_time` DATETIME DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 4.修改username为email
+USE xechat;
+
+-- 修改列名：将 username 改为 email
+ALTER TABLE `chat_user`
+    CHANGE COLUMN `username` `email` VARCHAR(50) NOT NULL UNIQUE COMMENT '登录邮箱';

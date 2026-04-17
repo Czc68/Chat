@@ -48,4 +48,5 @@ public interface StompConstant {
      * 聊天室消息撤消
      */
     String PUB_CHAT_ROOM_REVOKE = "/chatRoom/revoke";
+
 }

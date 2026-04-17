@@ -3,9 +3,12 @@ package cn.xeblog.xechat.service.impl;
 import cn.xeblog.xechat.constant.DateConstant;
 import cn.xeblog.xechat.domain.dto.ChatRecordDTO;
 import cn.xeblog.xechat.domain.mo.User;
+import cn.xeblog.xechat.entity.ChatHistory;
 import cn.xeblog.xechat.enums.MessageTypeEnum;
+import cn.xeblog.xechat.mapper.ChatHistoryMapper;
 import cn.xeblog.xechat.service.ChatRecordService;
 import cn.xeblog.xechat.utils.DateUtils;
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringEscapeUtils;
 import org.apache.commons.lang3.StringUtils;
@@ -13,48 +16,65 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
+import jakarta.annotation.Resource;
 import java.io.*;
+import java.time.LocalDateTime;
 import java.util.*;
 
-/**
- * @author yanpanyi
- * @date 2019/4/4
- */
 @Slf4j
 @Service
 public class ChatRecordServiceImpl implements ChatRecordService {
 
+    @Resource
+    private ChatHistoryMapper chatHistoryMapper;
+
     @Value("${chatrecord.path}")
     private String path;
+
     @Value("${chatrecord.accessAddress}")
     private String accessAddress;
 
-    /**
-     * 生成的文件后缀
-     */
     private static final String FILE_SUFFIX = ".md";
 
     @Async
     @Override
     public void addRecord(ChatRecordDTO chatRecordDTO) {
+        if (null == chatRecordDTO || chatRecordDTO.getUser() == null) return;
+
+        // 1. 核心：存入数据库 chat_history 表
+        if (chatRecordDTO.getType() == MessageTypeEnum.USER || chatRecordDTO.getType() == MessageTypeEnum.ROBOT) {
+            try {
+                String rawUserId = chatRecordDTO.getUser().getUserId();
+                // 只有登录用户的 ID（纯数字）才存入数据库，UUID游客仅存文件
+                if (StringUtils.isNumeric(rawUserId)) {
+                    ChatHistory history = new ChatHistory();
+                    history.setUserId(Long.parseLong(rawUserId)); // 对应数据库的 user_id
+                    history.setContent(chatRecordDTO.getMessage()); // 消息内容
+                    history.setCreateTime(LocalDateTime.now());
+                    chatHistoryMapper.insert(history);
+                    log.info("消息已成功存入数据库，用户ID: {}", rawUserId);
+                }
+            } catch (Exception e) {
+                log.error("数据库存储聊天记录失败", e);
+            }
+        }
+
+        // 2. 原有的文件备份逻辑（保留作为双重保险）
+        saveToFile(chatRecordDTO);
+    }
+
+    private void saveToFile(ChatRecordDTO chatRecordDTO) {
         File file = new File(createFileName());
         if (!file.getParentFile().exists()) {
             file.getParentFile().mkdirs();
         }
-
-        try (BufferedWriter out = new BufferedWriter(new OutputStreamWriter(new FileOutputStream(file, true),
-                "UTF-8"))) {
+        try (BufferedWriter out = new BufferedWriter(new OutputStreamWriter(new FileOutputStream(file, true), "UTF-8"))) {
             out.write(formatContent(chatRecordDTO));
         } catch (IOException e) {
-            log.error("添加聊天记录异常，error ->", e);
+            log.error("添加文件记录异常", e);
         }
     }
 
-    /**
-     * 创建文件名
-     *
-     * @return 文件名
-     */
     private String createFileName() {
         Calendar calendar = Calendar.getInstance();
         StringBuffer sb = new StringBuffer();
@@ -65,23 +85,12 @@ public class ChatRecordServiceImpl implements ChatRecordService {
         sb.append(File.separator);
         sb.append(DateUtils.getDate(calendar.getTime(), DateConstant.CHAT_RECORD_FILE_NAME));
         sb.append(FILE_SUFFIX);
-
         return sb.toString();
     }
 
-    /**
-     * 格式化内容
-     *
-     * @param chatRecordDTO 聊天记录对象
-     * @return 格式化后的字符串
-     */
     private String formatContent(ChatRecordDTO chatRecordDTO) {
-        if (null == chatRecordDTO) {
-            return "";
-        }
-
+        if (null == chatRecordDTO) return "";
         StringBuffer sb = new StringBuffer();
-
         User user = chatRecordDTO.getUser();
         switch (chatRecordDTO.getType()) {
             case ROBOT:
@@ -98,85 +107,53 @@ public class ChatRecordServiceImpl implements ChatRecordService {
             default:
                 break;
         }
-
         return sb.toString();
     }
 
     @Override
     public List<HashMap<String, Object>> listRecord(String directoryName) {
         File file = new File(path + directoryName);
-        if (!file.exists()) {
-            return null;
-        }
-
+        if (!file.exists()) return null;
         String[] tempList = file.list();
-        if (tempList == null || tempList.length < 1) {
-            return null;
-        }
-
+        if (tempList == null || tempList.length < 1) return null;
         List<HashMap<String, Object>> list = new ArrayList<>(tempList.length);
-        HashMap<String, Object> map;
         String url = null;
         for (String name : tempList) {
-            map = new HashMap<>(3, 1.0f);
-            // 是否是文件
+            HashMap<String, Object> map = new HashMap<>(3, 1.0f);
             boolean isFile = name.lastIndexOf(FILE_SUFFIX) != -1;
-            if (isFile) {
-                // 文件访问地址
-                url = accessAddress + directoryName + name;
-            }
+            if (isFile) url = accessAddress + directoryName + name;
             map.put("name", name);
             map.put("url", url);
             map.put("file", isFile);
-
             list.add(map);
         }
-
         return list;
     }
 
-    /**
-     * 格式化系统类型的消息
-     *
-     * @param sb StringBuffer对象
-     * @param chatRecordDTO 聊天记录对象
-     */
     private void formatSystemMsg(StringBuffer sb, ChatRecordDTO chatRecordDTO) {
-        sb.append("#### [");
-        sb.append(chatRecordDTO.getSendTime());
-        sb.append("] 系统消息：\r\n");
-        sb.append("> ");
-        sb.append(chatRecordDTO.getMessage());
-        sb.append("\r\n");
+        sb.append("#### [").append(chatRecordDTO.getSendTime()).append("] 系统消息：\r\n> ")
+                .append(chatRecordDTO.getMessage()).append("\r\n");
     }
 
-    /**
-     * 格式化用户类型的消息
-     *
-     * @param sb StringBuffer对象
-     * @param chatRecordDTO 聊天记录对象
-     */
     private void formatUserMsg(StringBuffer sb, ChatRecordDTO chatRecordDTO) {
-        final User user = chatRecordDTO.getUser();
+        User user = chatRecordDTO.getUser();
         String tag = chatRecordDTO.getType() == MessageTypeEnum.ROBOT ? "[系统机器人] " : "";
-        sb.append("#### [");
-        sb.append(chatRecordDTO.getSendTime());
-        sb.append("] ");
-        sb.append(tag);
-        sb.append(user.getUsername());
-        sb.append("(");
-        sb.append(user.getAddress());
-        sb.append(")：\r\n");
-
+        sb.append("#### [").append(chatRecordDTO.getSendTime()).append("] ")
+                .append(tag).append(user.getUsername()).append("(").append(user.getAddress()).append(")：\r\n");
         if (!StringUtils.isEmpty(chatRecordDTO.getImage())) {
-            sb.append("> ![](");
-            sb.append(chatRecordDTO.getImage());
-            sb.append(")\r\n");
+            sb.append("> ![](").append(chatRecordDTO.getImage()).append(")\r\n");
         }
         if (!StringUtils.isEmpty(chatRecordDTO.getMessage())) {
-            sb.append("> ");
-            sb.append(StringEscapeUtils.escapeHtml4(chatRecordDTO.getMessage()));
-            sb.append("\r\n");
+            sb.append("> ").append(StringEscapeUtils.escapeHtml4(chatRecordDTO.getMessage())).append("\r\n");
         }
+    }
+
+    @Override
+    public List<ChatHistory> getDatabaseHistory(int limit) {
+        QueryWrapper<ChatHistory> wrapper = new QueryWrapper<>();
+        wrapper.orderByDesc("create_time").last("limit " + limit);
+        List<ChatHistory> list = chatHistoryMapper.selectList(wrapper);
+        Collections.reverse(list);
+        return list;
     }
 }
