@@ -20,12 +20,16 @@ const ChatPage = () => {
     const stompClient = useRef(null);
     const messagesEndRef = useRef(null);
 
-    // 核心整合 1：获取登录时存入的真实用户数据
-    const currentUser = JSON.parse(localStorage.getItem('user')) || {
-        id: 'guest',
-        nickname: '治愈系游客',
-        avatar: 'https://api.multiavatar.com/star.png'
-    };
+    // 🛡️ 核心整合 1：带防崩溃保护的用户解析
+    let currentUser = { id: '999999', nickname: '治愈系游客', avatar: 'https://api.multiavatar.com/star.png' };
+    try {
+        const stored = localStorage.getItem('user');
+        if (stored && stored !== 'undefined' && stored !== 'null') {
+            currentUser = JSON.parse(stored);
+        }
+    } catch (e) {
+        console.warn("解析缓存失败，使用默认身份");
+    }
 
     const [contacts] = useState([
         { id: 1, name: 'XeChat 宇宙大厅', avatar: 'https://api.multiavatar.com/planet.png', lastMsg: '今天也要开心呀 ✨', time: '14:20', unread: 0, active: true },
@@ -107,20 +111,23 @@ const ChatPage = () => {
                 // 订阅公共聊天室
                 stompClient.current.subscribe('/topic/chatRoom', (msg) => {
                     const response = JSON.parse(msg.body);
-                    const receivedData = response.data; // 后端统一返回 ResponseVO
-
-                    if (receivedData.type === 'REVOKE') {
-                        // 收到撤回指令，根据 revokeMessageId 移除消息
-                        setMessages(prev => prev.filter(m => m.messageId !== receivedData.revokeMessageId));
-                    } else {
-                        // 正常消息，正常展示
-                        setMessages(prev => [...prev, { ...receivedData, id: Date.now() }]);
+                    // 💥 核心修复：后端包了一层 ResponseVO，真正的数据在 response.data 里！
+                    if (response && response.data) {
+                        const newMsg = response.data;
+                        if (newMsg.type === 'REVOKE') {
+                            setMessages(prev => prev.filter(m => m.messageId !== newMsg.revokeMessageId));
+                        } else {
+                            setMessages(prev => [...prev, { ...newMsg, id: Date.now() }]);
+                        }
                     }
                 });
-                // 订阅系统上下线状态
+
                 stompClient.current.subscribe('/topic/status', (msg) => {
-                    const statusMsg = JSON.parse(msg.body);
-                    setMessages(prev => [...prev, statusMsg]);
+                    const response = JSON.parse(msg.body);
+                    // 同样提取 data 字段
+                    if (response && response.data) {
+                        setMessages(prev => [...prev, response.data]);
+                    }
                 });
             },
             onDisconnect: () => setIsConnected(false)
@@ -331,13 +338,18 @@ const ChatPage = () => {
                                             )}
 
                                             {/* 自己气泡与撤回按钮 */}
+                                            {/* 自己气泡与撤回按钮 */}
                                             {isMe && (
-                                                <button
-                                                    onClick={() => recallMessage(m.messageId)}
-                                                    className="opacity-0 group-hover:opacity-100 text-[10px] text-slate-400 hover:text-red-500 transition-all px-2"
-                                                >
-                                                    撤回
-                                                </button>
+                                                <>
+                                                    <button onClick={() => recallMessage(m.messageId)} className="opacity-0 group-hover:opacity-100 text-[10px] text-slate-400 hover:text-red-500 transition-all mb-1">
+                                                        撤回
+                                                    </button>
+                                                    {/* 👇 刚才丢失的紫色气泡和文字找回来了 👇 */}
+                                                    <div className="px-5 py-3.5 bg-gradient-to-br from-[#A78BFA] to-[#C084FC] text-white text-[0.95rem] font-medium rounded-[1.5rem] rounded-tr-[0.4rem] shadow-[0_6px_20px_rgba(167,139,250,0.25)] leading-relaxed relative">
+                                                        {m.message && <p className="whitespace-pre-wrap break-words">{m.message}</p>}
+                                                        {m.image && <img src={m.image} alt="图片" className="max-w-[200px] rounded-lg mt-2 cursor-pointer hover:opacity-90" onClick={() => window.open(m.image)} />}
+                                                    </div>
+                                                </>
                                             )}
                                         </div>
                                     </div>

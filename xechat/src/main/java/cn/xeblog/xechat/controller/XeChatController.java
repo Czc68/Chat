@@ -97,26 +97,17 @@ public class XeChatController {
     /**
      * 撤回消息（安全增强版）
      */
+    /**
+     * 撤回消息（完美修复版）
+     */
     @MessageMapping(StompConstant.PUB_CHAT_ROOM_REVOKE)
-    public void revokeMessage(RevokeMessageRO revokeMessageRO, SimpMessageHeaderAccessor headerAccessor) throws Exception {
-        // 1. 统一从服务器 Session 获取身份
-        ChatUser loginUser = (ChatUser) headerAccessor.getSessionAttributes().get("user");
-        if (loginUser == null) {
-            // 使用现有的常量
+    public void revokeMessage(RevokeMessageRO revokeMessageRO, User user) throws Exception {
+        // 1. 拦截器已经绑定了 user，直接判断是否为空
+        if (revokeMessageRO == null || user == null) {
             throw new ErrorCodeException(CodeEnum.INVALID_PARAMETERS);
         }
 
-        // 2. 构造后端可信的 User 对象
-        User user = new User();
-        user.setUserId(loginUser.getId().toString());
-        user.setUsername(loginUser.getNickname());
-
-        // 3. 执行原有校验逻辑
-        if (revokeMessageRO == null) {
-            throw new ErrorCodeException(CodeEnum.INVALID_PARAMETERS);
-        }
-
-        // 校验撤回的消息是否属于当前登录用户
+        // 2. 校验撤回的消息是否属于当前发送请求的用户
         CheckUtils.checkMessageId(revokeMessageRO.getMessageId(), user.getUserId());
 
         RevokeMsgVo revokeMsgVo = new RevokeMsgVo();
