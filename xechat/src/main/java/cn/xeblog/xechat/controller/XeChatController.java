@@ -1,5 +1,6 @@
 package cn.xeblog.xechat.controller;
 
+import cn.xeblog.xechat.annotation.ChatRecord;
 import cn.xeblog.xechat.constant.RobotConstant;
 import cn.xeblog.xechat.constant.StompConstant;
 import cn.xeblog.xechat.domain.mo.User;
@@ -7,6 +8,7 @@ import cn.xeblog.xechat.domain.ro.MessageRO;
 import cn.xeblog.xechat.domain.ro.RevokeMessageRO;
 import cn.xeblog.xechat.domain.vo.MessageVO;
 import cn.xeblog.xechat.domain.vo.RevokeMsgVo;
+import cn.xeblog.xechat.entity.ChatUser;
 import cn.xeblog.xechat.enums.CodeEnum;
 import cn.xeblog.xechat.enums.MessageTypeEnum;
 import cn.xeblog.xechat.enums.inter.Code;
@@ -16,6 +18,7 @@ import cn.xeblog.xechat.utils.CheckUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.messaging.handler.annotation.MessageExceptionHandler;
 import org.springframework.messaging.handler.annotation.MessageMapping;
+import org.springframework.messaging.simp.SimpMessageHeaderAccessor;
 import org.springframework.web.bind.annotation.RestController;
 
 import jakarta.annotation.Resource;
@@ -92,18 +95,28 @@ public class XeChatController {
     }
 
     /**
-     * 撤回消息
-     *
-     * @param revokeMessageRO 撤消消息请求对象
-     * @param user 发送消息的用户对象
-     * @throws Exception
+     * 撤回消息（安全增强版）
      */
     @MessageMapping(StompConstant.PUB_CHAT_ROOM_REVOKE)
-    public void revokeMessage(RevokeMessageRO revokeMessageRO, User user) throws Exception {
-        if (revokeMessageRO == null || !CheckUtils.checkUser(user)) {
+    public void revokeMessage(RevokeMessageRO revokeMessageRO, SimpMessageHeaderAccessor headerAccessor) throws Exception {
+        // 1. 统一从服务器 Session 获取身份
+        ChatUser loginUser = (ChatUser) headerAccessor.getSessionAttributes().get("user");
+        if (loginUser == null) {
+            // 使用现有的常量
             throw new ErrorCodeException(CodeEnum.INVALID_PARAMETERS);
         }
 
+        // 2. 构造后端可信的 User 对象
+        User user = new User();
+        user.setUserId(loginUser.getId().toString());
+        user.setUsername(loginUser.getNickname());
+
+        // 3. 执行原有校验逻辑
+        if (revokeMessageRO == null) {
+            throw new ErrorCodeException(CodeEnum.INVALID_PARAMETERS);
+        }
+
+        // 校验撤回的消息是否属于当前登录用户
         CheckUtils.checkMessageId(revokeMessageRO.getMessageId(), user.getUserId());
 
         RevokeMsgVo revokeMsgVo = new RevokeMsgVo();
@@ -112,12 +125,10 @@ public class XeChatController {
         revokeMsgVo.setType(MessageTypeEnum.REVOKE);
 
         if (CheckUtils.checkReceiver(revokeMessageRO.getReceiver())) {
-            // 将消息发送到指定用户
             messageService.sendMessageToUser(revokeMessageRO.getReceiver(), revokeMsgVo);
             return;
         }
 
-        // 将消息发送到所有用户
         messageService.sendMessage(StompConstant.SUB_CHAT_ROOM, revokeMsgVo);
     }
 

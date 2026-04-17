@@ -1,6 +1,11 @@
 import React, { useEffect, useState, useRef } from 'react';
 import SockJS from 'sockjs-client';
 import { Client } from '@stomp/stompjs';
+import axios from 'axios';
+
+// 统一 Axios 配置
+axios.defaults.baseURL = 'http://localhost:8080';
+axios.defaults.withCredentials = true;
 
 const ChatPage = () => {
     const [messages, setMessages] = useState([]);
@@ -8,27 +13,29 @@ const ChatPage = () => {
     const [isConnected, setIsConnected] = useState(false);
     const [showEmoji, setShowEmoji] = useState(false);
     const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
+    // 在现有的 useState 下面加一行
+    const [isUploading, setIsUploading] = useState(false);
+    const fileInputRef = useRef(null); // 用于触发隐藏的文件选择框
 
     const stompClient = useRef(null);
     const messagesEndRef = useRef(null);
 
-    // 当前登录用户
+    // 核心整合 1：获取登录时存入的真实用户数据
     const currentUser = JSON.parse(localStorage.getItem('user')) || {
-        nickname: '治愈系新星',
+        id: 'guest',
+        nickname: '治愈系游客',
         avatar: 'https://api.multiavatar.com/star.png'
     };
 
-    // 模拟联系人数据
     const [contacts] = useState([
-        { id: 1, name: 'XeChat 治愈星球', avatar: 'https://api.multiavatar.com/planet.png', lastMsg: '今天也要开心呀 ✨', time: '14:20', unread: 0, active: true },
-        { id: 2, name: '图灵小助手', avatar: 'https://api.multiavatar.com/robot.png', lastMsg: '主人有什么吩咐？', time: '昨天', unread: 3, active: false },
+        { id: 1, name: 'XeChat 宇宙大厅', avatar: 'https://api.multiavatar.com/planet.png', lastMsg: '今天也要开心呀 ✨', time: '14:20', unread: 0, active: true },
+        { id: 2, name: '图灵小助手', avatar: 'https://api.multiavatar.com/robot.png', lastMsg: '主人有什么吩咐？', time: '昨天', unread: 0, active: false },
     ]);
 
     // 监听鼠标位置 (用于底部小怪兽的眼神跟随)
     useEffect(() => {
         let animationFrameId;
         const handleMouseMove = (e) => {
-            // 使用 requestAnimationFrame 保证动画极度顺滑且不掉帧
             animationFrameId = requestAnimationFrame(() => {
                 setMousePos({ x: e.clientX, y: e.clientY });
             });
@@ -45,8 +52,48 @@ const ChatPage = () => {
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }, [messages]);
 
+    // 核心整合 2：解析后端的 Markdown 历史记录
+    const loadHistory = async () => {
+        try {
+            const res = await axios.get('/api/record');
+            const list = res.data.data?.list;
+            if (list && list.length > 0) {
+                // 取最新一天的文件
+                const latestFile = list[list.length - 1];
+                if (latestFile.file && latestFile.url) {
+                    const mdRes = await axios.get(latestFile.url);
+                    const mdText = mdRes.data;
+                    // 简易 Markdown 解析器
+                    const blocks = mdText.split('#### [').slice(1);
+                    const historyMsgs = blocks.map(block => {
+                        const timeEnd = block.indexOf(']');
+                        const time = block.substring(0, timeEnd);
+                        const headerEnd = block.indexOf('：');
+                        const userStr = block.substring(timeEnd + 2, headerEnd);
+                        const username = userStr.split('(')[0].replace('[系统机器人] ', '');
+                        const contentMatches = block.match(/> (.*?)(?=\n|$)/g);
+                        const content = contentMatches ? contentMatches.map(c => c.replace('> ', '').trim()).join('\n') : '';
+
+                        return {
+                            user: { username: username, avatar: 'https://api.multiavatar.com/default.png' },
+                            message: content,
+                            sendTime: time,
+                            messageId: `history_${Math.random()}` // 历史记录暂时生成伪id
+                        };
+                    });
+                    setMessages(historyMsgs);
+                }
+            }
+        } catch (e) {
+            console.error("拉取历史记录失败:", e);
+        }
+    };
+
     // WebSocket 通信逻辑
     useEffect(() => {
+        // 先加载历史记录
+        loadHistory();
+
         const socket = new SockJS('http://localhost:8080/xechat');
         stompClient.current = new Client({
             webSocketFactory: () => socket,
@@ -57,11 +104,23 @@ const ChatPage = () => {
             },
             onConnect: () => {
                 setIsConnected(true);
+                // 订阅公共聊天室
                 stompClient.current.subscribe('/topic/chatRoom', (msg) => {
-                    setMessages(prev => [...prev, { ...JSON.parse(msg.body), id: Date.now() }]);
+                    const response = JSON.parse(msg.body);
+                    const receivedData = response.data; // 后端统一返回 ResponseVO
+
+                    if (receivedData.type === 'REVOKE') {
+                        // 收到撤回指令，根据 revokeMessageId 移除消息
+                        setMessages(prev => prev.filter(m => m.messageId !== receivedData.revokeMessageId));
+                    } else {
+                        // 正常消息，正常展示
+                        setMessages(prev => [...prev, { ...receivedData, id: Date.now() }]);
+                    }
                 });
+                // 订阅系统上下线状态
                 stompClient.current.subscribe('/topic/status', (msg) => {
-                    setMessages(prev => [...prev, JSON.parse(msg.body)]);
+                    const statusMsg = JSON.parse(msg.body);
+                    setMessages(prev => [...prev, statusMsg]);
                 });
             },
             onDisconnect: () => setIsConnected(false)
@@ -71,14 +130,59 @@ const ChatPage = () => {
         return () => stompClient.current?.deactivate();
     }, []);
 
+    // 💥 修复 1：发送消息时，明确告诉后端这是 JSON 数据
     const sendMessage = () => {
         if (input.trim() && stompClient.current?.connected) {
             stompClient.current.publish({
                 destination: '/chatRoom',
+                headers: { 'content-type': 'application/json' }, // 必须加这个！
                 body: JSON.stringify({ message: input, image: null })
             });
             setInput('');
             setShowEmoji(false);
+        }
+    };
+
+    // 在 sendMessage 方法下面，添加这个处理图片上传的函数
+    const handleImageUpload = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        // 简单的格式校验
+        if (!file.type.startsWith('image/')) {
+            alert('只能上传图片文件！');
+            return;
+        }
+
+        setIsUploading(true);
+        const formData = new FormData();
+        formData.append('file', file); // 后端 @RequestParam("file") 对应这里的 'file'
+
+        try {
+            // 1. 调用后端的上传接口
+            const response = await axios.post('/api/upload/image', formData, {
+                headers: { 'Content-Type': 'multipart/form-data' }
+            });
+
+            if (response.data.code === 200 || response.data.code === 0) {
+                const imageUrl = response.data.path; // 获取后端返回的图片路径
+
+                // 2. 通过 WebSocket 发送包含图片的 STOMP 消息
+                if (stompClient.current?.connected) {
+                    stompClient.current.publish({
+                        destination: '/chatRoom',
+                        body: JSON.stringify({ message: '', image: imageUrl })
+                    });
+                }
+            } else {
+                alert('图片上传失败：' + response.data.desc);
+            }
+        } catch (error) {
+            console.error("上传异常", error);
+            alert('网络异常，图片上传失败');
+        } finally {
+            setIsUploading(false);
+            e.target.value = ''; // 清空 input，允许重复上传同一张图片
         }
     };
 
@@ -88,14 +192,23 @@ const ChatPage = () => {
             sendMessage();
         }
     };
+    // 💥 修复 2：撤回消息也一样需要加 Header
+    const recallMessage = (messageId) => {
+        if (stompClient.current?.connected) {
+            stompClient.current.publish({
+                destination: '/chatRoom/revoke',
+                headers: { 'content-type': 'application/json' }, // 必须加这个！
+                body: JSON.stringify({ messageId: messageId })
+            });
+        }
+    };
 
-    // 计算小怪兽眼球偏移量 (限制在一定范围内)
+    // 计算小怪兽眼球偏移量
     const maxOffset = 6;
     const eyeOffsetX = Math.max(-maxOffset, Math.min(maxOffset, (mousePos.x - window.innerWidth / 4) / 40));
     const eyeOffsetY = Math.max(-maxOffset, Math.min(maxOffset, (mousePos.y - window.innerHeight) / 40));
 
     return (
-        // 根容器：严格限定 100vh，无溢出。底色为纯白，加入极淡的柔紫渐变
         <div className="flex h-screen w-full overflow-hidden bg-white font-sans selection:bg-purple-200 text-slate-800 relative"
              style={{ backgroundImage: 'radial-gradient(circle at 80% -20%, #F5F3FF 0%, #FFFFFF 50%, #FFF8F1 100%)' }}>
 
@@ -112,14 +225,11 @@ const ChatPage = () => {
                 `}
             </style>
 
-            {/* ====== 左侧：会话侧边栏 ====== */}
             <aside className="w-80 h-full flex flex-col bg-white/60 backdrop-blur-2xl border-r border-slate-100/60 shadow-[4px_0_24px_rgba(0,0,0,0.01)] relative z-20 shrink-0">
-
-                {/* 1. 顶部：用户个人信息卡片 */}
                 <div className="px-6 pt-8 pb-5">
                     <div className="flex items-center gap-4 group cursor-pointer">
                         <div className="relative">
-                            <img src={currentUser.avatar} alt="avatar" className="w-14 h-14 rounded-[1.2rem] object-cover bg-slate-50 shadow-sm transition-transform group-hover:scale-105" />
+                            <img src={currentUser.avatar || 'https://api.multiavatar.com/default.png'} alt="avatar" className="w-14 h-14 rounded-[1.2rem] object-cover bg-slate-50 shadow-sm transition-transform group-hover:scale-105" />
                             <span className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-[3px] border-white ${isConnected ? 'bg-[#34D399]' : 'bg-slate-300'}`}></span>
                         </div>
                         <div className="flex-1 overflow-hidden">
@@ -129,7 +239,6 @@ const ChatPage = () => {
                     </div>
                 </div>
 
-                {/* 2. 圆角搜索框 */}
                 <div className="px-6 pb-4">
                     <div className="relative">
                         <svg className="absolute left-3.5 top-3 w-4 h-4 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
@@ -137,7 +246,6 @@ const ChatPage = () => {
                     </div>
                 </div>
 
-                {/* 3. 会话列表 */}
                 <div className="flex-1 overflow-y-auto custom-scrollbar px-4 pb-28 relative z-10">
                     {contacts.map(contact => (
                         <div key={contact.id} className={`flex items-center p-3 mb-1.5 rounded-[1.2rem] cursor-pointer transition-all duration-300 group ${contact.active ? 'bg-[#F5F3FF] shadow-[0_2px_10px_rgba(167,139,250,0.06)]' : 'hover:bg-slate-50'}`}>
@@ -160,32 +268,24 @@ const ChatPage = () => {
                     ))}
                 </div>
 
-                {/* 4. 左下角：登录页同款软萌几何小怪兽 (完美融入，不挡内容) */}
+                {/* 几何小怪兽保持原样 */}
                 <div className="absolute bottom-4 left-6 pointer-events-none opacity-85 z-0 flex items-end">
-                    {/* 小怪兽身体 (明黄色极简色块) */}
                     <div className="relative w-16 h-14 bg-[#FDE047] rounded-t-[2rem] rounded-bl-[2rem] rounded-br-md shadow-[0_4px_12px_rgba(253,224,71,0.3)] flex justify-center items-center pt-2">
-                        {/* 眼睛区域 */}
                         <div className="flex gap-1.5">
-                            {/* 左眼 */}
                             <div className="w-4 h-4 bg-white rounded-full flex justify-center items-center overflow-hidden shadow-inner">
                                 <div className="w-2 h-2 bg-[#1E1E1E] rounded-full transition-transform duration-75 ease-out" style={{ transform: `translate(${eyeOffsetX}px, ${eyeOffsetY}px)` }}></div>
                             </div>
-                            {/* 右眼 (稍微小一点显得萌) */}
                             <div className="w-3.5 h-3.5 bg-white rounded-full flex justify-center items-center overflow-hidden shadow-inner mt-0.5">
                                 <div className="w-1.5 h-1.5 bg-[#1E1E1E] rounded-full transition-transform duration-75 ease-out" style={{ transform: `translate(${eyeOffsetX}px, ${eyeOffsetY}px)` }}></div>
                             </div>
                         </div>
-                        {/* 腮红 */}
                         <div className="absolute top-7 left-1.5 w-2.5 h-1.5 bg-[#F87171] opacity-40 rounded-full blur-[1px]"></div>
                         <div className="absolute top-7 right-2 w-2.5 h-1.5 bg-[#F87171] opacity-40 rounded-full blur-[1px]"></div>
                     </div>
                 </div>
             </aside>
 
-            {/* ====== 右侧：主聊天区 ====== */}
             <main className="flex-1 flex flex-col relative min-w-0 bg-transparent">
-
-                {/* 1. 顶部：无遮挡完整标题栏 */}
                 <header className="h-20 flex items-center justify-between px-8 bg-white/40 backdrop-blur-xl border-b border-slate-100/60 shrink-0 z-10">
                     <div>
                         <h1 className="text-[1.2rem] font-extrabold text-slate-800 tracking-tight">XeChat 宇宙大厅</h1>
@@ -194,28 +294,17 @@ const ChatPage = () => {
                             <span className="text-[0.75rem] font-medium text-slate-400">1,204 位探险家</span>
                         </div>
                     </div>
-                    {/* 功能按钮 */}
                     <div className="flex items-center gap-3">
                         <button className="w-9 h-9 flex items-center justify-center rounded-full bg-white text-slate-400 hover:text-[#8B5CF6] hover:shadow-[0_4px_12px_rgba(139,92,246,0.1)] transition-all">
                             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
                         </button>
-                        <button className="w-9 h-9 flex items-center justify-center rounded-full bg-white text-slate-400 hover:text-[#8B5CF6] hover:shadow-[0_4px_12px_rgba(139,92,246,0.1)] transition-all">
-                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M5 12h.01M12 12h.01M19 12h.01M6 12a1 1 0 11-2 0 1 1 0 012 0zm7 0a1 1 0 11-2 0 1 1 0 012 0zm7 0a1 1 0 11-2 0 1 1 0 012 0z"></path></svg>
-                        </button>
                     </div>
                 </header>
 
-                {/* 2. 中间：消息流区域 */}
                 <div className="flex-1 overflow-y-auto custom-scrollbar p-8">
                     <div className="space-y-6 max-w-4xl mx-auto">
-
-                        {/* 时间戳 */}
-                        <div className="flex justify-center">
-                            <span className="px-4 py-1.5 bg-[#F8FAFC] text-[0.7rem] font-bold text-slate-400 rounded-full tracking-wider">TODAY 14:00</span>
-                        </div>
-
                         {messages.map((m, i) => {
-                            const isSystem = !m.user;
+                            const isSystem = m.type === 'SYSTEM' || !m.user;
                             const isMe = m.user?.username === currentUser.nickname;
 
                             if (isSystem) return (
@@ -234,22 +323,21 @@ const ChatPage = () => {
                                         </div>
 
                                         <div className="flex items-end gap-2">
-                                            {/* 对方消息气泡 (干净白底+浅灰边) */}
+                                            {/* 对方气泡 */}
                                             {!isMe && (
                                                 <div className="px-5 py-3.5 bg-white border border-slate-100 shadow-[0_4px_16px_rgba(0,0,0,0.02)] text-slate-700 text-[0.95rem] font-medium rounded-[1.5rem] rounded-tl-[0.4rem] leading-relaxed">
                                                     {m.message}
                                                 </div>
                                             )}
 
-                                            {/* 自己消息气泡 (品牌紫渐变+低饱和阴影) */}
+                                            {/* 自己气泡与撤回按钮 */}
                                             {isMe && (
-                                                <div className="px-5 py-3.5 bg-gradient-to-br from-[#A78BFA] to-[#C084FC] text-white text-[0.95rem] font-medium rounded-[1.5rem] rounded-tr-[0.4rem] shadow-[0_6px_20px_rgba(167,139,250,0.25)] leading-relaxed relative">
-                                                    {m.message}
-                                                    {/* 已读状态：小巧精致 */}
-                                                    <span className="absolute -bottom-5 right-2 text-[0.65rem] font-bold text-[#8B5CF6] opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5">
-                                                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7"></path></svg>已读
-                                                    </span>
-                                                </div>
+                                                <button
+                                                    onClick={() => recallMessage(m.messageId)}
+                                                    className="opacity-0 group-hover:opacity-100 text-[10px] text-slate-400 hover:text-red-500 transition-all px-2"
+                                                >
+                                                    撤回
+                                                </button>
                                             )}
                                         </div>
                                     </div>
@@ -260,9 +348,7 @@ const ChatPage = () => {
                     </div>
                 </div>
 
-                {/* 3. 底部：大圆角富文本输入栏 */}
                 <div className="px-8 pb-8 pt-2 shrink-0 relative">
-                    {/* 表情面板浮层 */}
                     {showEmoji && (
                         <div className="absolute bottom-full left-8 mb-4 p-4 rounded-[1.5rem] bg-white shadow-[0_10px_40px_rgba(0,0,0,0.08)] border border-slate-100 grid grid-cols-6 gap-2 z-50">
                             {['😀','😂','🥰','😎','🥺','✨','🎉','🔥','👀','💡','👍','🌸'].map(emoji => (
@@ -272,8 +358,6 @@ const ChatPage = () => {
                     )}
 
                     <div className="bg-white rounded-[1.8rem] p-2.5 flex flex-col shadow-[0_8px_30px_rgba(0,0,0,0.03)] border border-slate-100 transition-all duration-300 focus-within:shadow-[0_12px_40px_rgba(167,139,250,0.12)] focus-within:border-purple-100">
-
-                        {/* 多行输入框 */}
                         <textarea
                             value={input}
                             onChange={e => setInput(e.target.value)}
@@ -282,20 +366,30 @@ const ChatPage = () => {
                             className="w-full bg-transparent border-none px-4 py-3 text-[0.95rem] text-slate-700 font-medium focus:outline-none resize-none max-h-32 min-h-[50px] custom-scrollbar placeholder-slate-300"
                             rows="1"
                         />
-
-                        {/* 工具栏与发送按钮 */}
                         <div className="flex justify-between items-center px-3 pt-2 pb-1">
-                            {/* 左侧附件按钮组 (使用圆润的图标和浅色悬停) */}
                             <div className="flex gap-1.5">
                                 <button onClick={() => setShowEmoji(!showEmoji)} className="p-2 rounded-full text-slate-400 hover:bg-[#F5F3FF] hover:text-[#8B5CF6] transition-colors">
                                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
                                 </button>
-                                <button className="p-2 rounded-full text-slate-400 hover:bg-[#F5F3FF] hover:text-[#8B5CF6] transition-colors">
+                                {/* ====== 开始：真实的图片上传功能 ====== */}
+                                <input
+                                    type="file"
+                                    accept="image/*"
+                                    style={{ display: 'none' }}
+                                    ref={fileInputRef}
+                                    onChange={handleImageUpload}
+                                />
+                                <button
+                                    onClick={() => fileInputRef.current?.click()}
+                                    disabled={isUploading}
+                                    className={`p-2 rounded-full transition-colors ${isUploading ? 'opacity-50 cursor-wait' : 'text-slate-400 hover:bg-[#F5F3FF] hover:text-[#8B5CF6]'}`}
+                                    title="发送图片"
+                                >
                                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
                                 </button>
+                                {/* ====== 结束：真实的图片上传功能 ====== */}
                             </div>
 
-                            {/* 黑金质感圆润发送按钮 */}
                             <button
                                 onClick={sendMessage}
                                 disabled={!input.trim()}

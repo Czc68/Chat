@@ -306,6 +306,8 @@ function LoginPage() {
         // 登录成功
         console.log("登录成功！", response.data);
 
+        // 👇👇👇 加上这一行！将后端返回的真实用户数据存入 localStorage 👇👇👇
+        localStorage.setItem("user", JSON.stringify(response.data.data));
         // 如果勾选了“记住我”，可以将账号存在本地 (仅作前端体验优化)
         if (rememberMe) {
           localStorage.setItem("rememberedEmail", email);

@@ -1,15 +1,13 @@
 package cn.xeblog.xechat.controller;
 
-import cn.xeblog.xechat.domain.vo.ResponseVO;
 import cn.xeblog.xechat.entity.ChatUser;
 import cn.xeblog.xechat.service.IUserService;
-import com.baomidou.mybatisplus.core.toolkit.StringUtils;
 import jakarta.annotation.Resource;
 import jakarta.servlet.http.HttpSession;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
-@CrossOrigin(origins = "http://localhost:5173", allowCredentials = "true")
+
 @RestController
 @RequestMapping("/api/auth")
 public class AuthController {
@@ -18,43 +16,20 @@ public class AuthController {
     private IUserService userService;
 
     @PostMapping("/login")
-    public ResponseVO login(@RequestBody ChatUser loginInfo, HttpSession session) {
-        // 1. 简单校验前端传来的参数
-        if (loginInfo.getEmail() == null || loginInfo.getPassword() == null) {
-            return ResponseVO.error("邮箱或密码不能为空");
-        }
-
-        // 2. 调用 service 进行登录验证
+    public Map<String, Object> login(@RequestBody ChatUser loginInfo, HttpSession session) {
         ChatUser user = userService.login(loginInfo.getEmail(), loginInfo.getPassword());
-
         if (user != null) {
-            // 3. 登录成功，存入 session
             session.setAttribute("user", user);
-
-            // 极其不建议把密码原样返回给前端！最好在返回前把密码置空
-            user.setPassword(null);
-
-            // 返回包含用户数据的成功响应
-            return ResponseVO.success(user);
+            return Map.of("code", 200, "msg", "登录成功", "data", user);
         }
-
-        // 4. 登录失败
-        return ResponseVO.error("邮箱或密码错误");
+        return Map.of("code", 400, "msg", "用户名或密码错误");
     }
 
     @PostMapping("/register")
-    public ResponseVO register(@RequestBody ChatUser chatUser) {
-        // 检查 email 是否为空
-        if (StringUtils.isEmpty(chatUser.getEmail())) {
-            return ResponseVO.error("邮箱不能为空");
+    public Map<String, Object> register(@RequestBody ChatUser user) {
+        if (userService.register(user)) {
+            return Map.of("code", 200, "msg", "注册成功");
         }
-
-        // 调用 service 检查邮箱是否存在
-        if (userService.checkEmailExists(chatUser.getEmail())) {
-            return ResponseVO.error("该邮箱已被注册");
-        }
-
-        // ... 保存逻辑
-        return userService.save(chatUser) ? ResponseVO.success() : ResponseVO.error("注册失败");
+        return Map.of("code", 400, "msg", "注册失败，用户名可能已存在");
     }
 }

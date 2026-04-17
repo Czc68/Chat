@@ -803,6 +803,7 @@ public interface StompConstant {
      * 聊天室消息撤消
      */
     String PUB_CHAT_ROOM_REVOKE = "/chatRoom/revoke";
+
 }
 
 ```
@@ -839,16 +840,14 @@ public interface UserStatusConstant {
 ```java
 package cn.xeblog.xechat.controller;
 
-import cn.xeblog.xechat.domain.vo.ResponseVO;
 import cn.xeblog.xechat.entity.ChatUser;
 import cn.xeblog.xechat.service.IUserService;
-import com.baomidou.mybatisplus.core.toolkit.StringUtils;
 import jakarta.annotation.Resource;
 import jakarta.servlet.http.HttpSession;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
-@CrossOrigin(origins = "http://localhost:5173", allowCredentials = "true")
+
 @RestController
 @RequestMapping("/api/auth")
 public class AuthController {
@@ -857,44 +856,47 @@ public class AuthController {
     private IUserService userService;
 
     @PostMapping("/login")
-    public ResponseVO login(@RequestBody ChatUser loginInfo, HttpSession session) {
-        // 1. 简单校验前端传来的参数
-        if (loginInfo.getEmail() == null || loginInfo.getPassword() == null) {
-            return ResponseVO.error("邮箱或密码不能为空");
-        }
-
-        // 2. 调用 service 进行登录验证
+    public Map<String, Object> login(@RequestBody ChatUser loginInfo, HttpSession session) {
         ChatUser user = userService.login(loginInfo.getEmail(), loginInfo.getPassword());
-
         if (user != null) {
-            // 3. 登录成功，存入 session
             session.setAttribute("user", user);
-
-            // 极其不建议把密码原样返回给前端！最好在返回前把密码置空
-            user.setPassword(null);
-
-            // 返回包含用户数据的成功响应
-            return ResponseVO.success(user);
+            return Map.of("code", 200, "msg", "登录成功", "data", user);
         }
-
-        // 4. 登录失败
-        return ResponseVO.error("邮箱或密码错误");
+        return Map.of("code", 400, "msg", "用户名或密码错误");
     }
 
     @PostMapping("/register")
-    public ResponseVO register(@RequestBody ChatUser chatUser) {
-        // 检查 email 是否为空
-        if (StringUtils.isEmpty(chatUser.getEmail())) {
-            return ResponseVO.error("邮箱不能为空");
+    public Map<String, Object> register(@RequestBody ChatUser user) {
+        if (userService.register(user)) {
+            return Map.of("code", 200, "msg", "注册成功");
         }
+        return Map.of("code", 400, "msg", "注册失败，用户名可能已存在");
+    }
+}
+```
 
-        // 调用 service 检查邮箱是否存在
-        if (userService.checkEmailExists(chatUser.getEmail())) {
-            return ResponseVO.error("该邮箱已被注册");
-        }
+---
 
-        // ... 保存逻辑
-        return userService.save(chatUser) ? ResponseVO.success() : ResponseVO.error("注册失败");
+## 文件: xechat\src\main\java\cn\xeblog\xechat\controller\ChatHistoryController.java
+```java
+package cn.xeblog.xechat.controller;
+
+import cn.xeblog.xechat.domain.vo.ResponseVO;
+import cn.xeblog.xechat.service.ChatRecordService;
+import jakarta.annotation.Resource;
+import org.springframework.web.bind.annotation.*;
+
+@RestController
+@RequestMapping("/api/chat")
+public class ChatHistoryController {
+
+    @Resource
+    private ChatRecordService chatRecordService;
+
+    @GetMapping("/history")
+    public ResponseVO getHistory(@RequestParam(defaultValue = "20") int limit) {
+        // 调用你在 ChatRecordServiceImpl 中实现的 getDatabaseHistory 方法
+        return new ResponseVO(chatRecordService.getDatabaseHistory(limit));
     }
 }
 ```
@@ -908,19 +910,9 @@ package cn.xeblog.xechat.controller;
 import cn.xeblog.xechat.domain.vo.ResponseVO;
 import cn.xeblog.xechat.service.ChatRecordService;
 import com.alibaba.fastjson2.JSONObject;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
-import org.springframework.web.bind.annotation.RestController;
-
+import org.springframework.web.bind.annotation.*;
 import jakarta.annotation.Resource;
 
-/**
- * 聊天记录
- *
- * @author yanpanyi
- * @date 2019/4/4
- */
 @RestController
 @RequestMapping("/api/record")
 public class ChatRecordController {
@@ -928,21 +920,13 @@ public class ChatRecordController {
     @Resource
     private ChatRecordService chatRecordService;
 
-    /**
-     * 聊天记录列表
-     *
-     * @param directoryName 目录名
-     * @return ResponseVO
-     */
     @GetMapping
     public ResponseVO listChatRecord(@RequestParam(required = false, defaultValue = "") String directoryName) {
         JSONObject jsonObject = new JSONObject();
         jsonObject.put("list", chatRecordService.listRecord(directoryName));
-
         return new ResponseVO(jsonObject);
     }
 }
-
 ```
 
 ---
@@ -999,6 +983,7 @@ public class UploadController {
 ```java
 package cn.xeblog.xechat.controller;
 
+import cn.xeblog.xechat.annotation.ChatRecord;
 import cn.xeblog.xechat.constant.RobotConstant;
 import cn.xeblog.xechat.constant.StompConstant;
 import cn.xeblog.xechat.domain.mo.User;
@@ -1006,6 +991,7 @@ import cn.xeblog.xechat.domain.ro.MessageRO;
 import cn.xeblog.xechat.domain.ro.RevokeMessageRO;
 import cn.xeblog.xechat.domain.vo.MessageVO;
 import cn.xeblog.xechat.domain.vo.RevokeMsgVo;
+import cn.xeblog.xechat.entity.ChatUser;
 import cn.xeblog.xechat.enums.CodeEnum;
 import cn.xeblog.xechat.enums.MessageTypeEnum;
 import cn.xeblog.xechat.enums.inter.Code;
@@ -1015,6 +1001,7 @@ import cn.xeblog.xechat.utils.CheckUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.messaging.handler.annotation.MessageExceptionHandler;
 import org.springframework.messaging.handler.annotation.MessageMapping;
+import org.springframework.messaging.simp.SimpMessageHeaderAccessor;
 import org.springframework.web.bind.annotation.RestController;
 
 import jakarta.annotation.Resource;
@@ -1091,18 +1078,28 @@ public class XeChatController {
     }
 
     /**
-     * 撤回消息
-     *
-     * @param revokeMessageRO 撤消消息请求对象
-     * @param user 发送消息的用户对象
-     * @throws Exception
+     * 撤回消息（安全增强版）
      */
     @MessageMapping(StompConstant.PUB_CHAT_ROOM_REVOKE)
-    public void revokeMessage(RevokeMessageRO revokeMessageRO, User user) throws Exception {
-        if (revokeMessageRO == null || !CheckUtils.checkUser(user)) {
+    public void revokeMessage(RevokeMessageRO revokeMessageRO, SimpMessageHeaderAccessor headerAccessor) throws Exception {
+        // 1. 统一从服务器 Session 获取身份
+        ChatUser loginUser = (ChatUser) headerAccessor.getSessionAttributes().get("user");
+        if (loginUser == null) {
+            // 使用现有的常量
             throw new ErrorCodeException(CodeEnum.INVALID_PARAMETERS);
         }
 
+        // 2. 构造后端可信的 User 对象
+        User user = new User();
+        user.setUserId(loginUser.getId().toString());
+        user.setUsername(loginUser.getNickname());
+
+        // 3. 执行原有校验逻辑
+        if (revokeMessageRO == null) {
+            throw new ErrorCodeException(CodeEnum.INVALID_PARAMETERS);
+        }
+
+        // 校验撤回的消息是否属于当前登录用户
         CheckUtils.checkMessageId(revokeMessageRO.getMessageId(), user.getUserId());
 
         RevokeMsgVo revokeMsgVo = new RevokeMsgVo();
@@ -1111,12 +1108,10 @@ public class XeChatController {
         revokeMsgVo.setType(MessageTypeEnum.REVOKE);
 
         if (CheckUtils.checkReceiver(revokeMessageRO.getReceiver())) {
-            // 将消息发送到指定用户
             messageService.sendMessageToUser(revokeMessageRO.getReceiver(), revokeMsgVo);
             return;
         }
 
-        // 将消息发送到所有用户
         messageService.sendMessage(StompConstant.SUB_CHAT_ROOM, revokeMsgVo);
     }
 
@@ -1541,33 +1536,6 @@ public class ResponseVO implements Serializable {
         this.desc = code.getDesc();
     }
 
-    // ==========================================
-    // 下面是你需要补充的静态辅助方法
-    // ==========================================
-
-    /**
-     * 响应成功 (无数据)
-     */
-    public static ResponseVO success() {
-        return new ResponseVO(SUCCESS);
-    }
-
-    /**
-     * 响应成功 (带数据)
-     */
-    public static ResponseVO success(Object data) {
-        return new ResponseVO(data);
-    }
-
-    /**
-     * 响应失败 (自定义错误提示)
-     */
-    public static ResponseVO error(String desc) {
-        // 默认使用 FAILED (503) 状态码，并覆盖为自定义的错误信息
-        ResponseVO responseVO = new ResponseVO(CodeEnum.FAILED);
-        responseVO.setDesc(desc);
-        return responseVO;
-    }
 
 }
 
@@ -1606,6 +1574,32 @@ public class RevokeMsgVo extends MessageVO {
 
 ---
 
+## 文件: xechat\src\main\java\cn\xeblog\xechat\entity\ChatHistory.java
+```java
+package cn.xeblog.xechat.entity;
+
+import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableName;
+import lombok.Data;
+
+import java.time.LocalDateTime;
+
+@Data
+@TableName("chat_history")
+public class ChatHistory {
+    @TableId(type = IdType.AUTO)
+    private Long id;
+    private Long userId;      // 对应 chat_user.id
+    private String content;    // 消息内容
+    private LocalDateTime createTime;
+}
+
+
+```
+
+---
+
 ## 文件: xechat\src\main\java\cn\xeblog\xechat\entity\ChatUser.java
 ```java
 package cn.xeblog.xechat.entity;
@@ -1622,28 +1616,24 @@ import java.time.LocalDateTime;
 public class ChatUser {
     @TableId(type = IdType.AUTO)
     private Long id;
-    private String email;
+
+    private String email;    // 登录用 email
+
     @TableField(select = false)
-    @JsonProperty(access =  JsonProperty.Access.WRITE_ONLY)// 仅允许写入（注册），禁止输出（登录返回）
+    @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
     private String password;
-    private String nickname;
+
+    private String nickname; // 展示用 nickname
     private String avatar;
     private String signature;
-
-    /** 用户画像标签 */
     private String tags;
 
-    // 自动填充：插入时填充
     @TableField(fill = FieldFill.INSERT)
-    @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
     private LocalDateTime createTime;
 
-    // 自动填充：插入和更新时均填充
-    @TableField(fill = FieldFill.INSERT_UPDATE)
-    @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
+    @TableField(fill = FieldFill.INSERT_UPDATE) // 必须确保 DB 中有 update_time 字段
     private LocalDateTime updateTime;
 }
-
 ```
 
 ---
@@ -1889,9 +1879,14 @@ package cn.xeblog.xechat.interceptor;
 
 import cn.xeblog.xechat.constant.UserStatusConstant;
 import cn.xeblog.xechat.domain.mo.User;
+import cn.xeblog.xechat.entity.ChatUser;
 import cn.xeblog.xechat.utils.SensitiveWordUtils;
 import cn.xeblog.xechat.utils.UUIDUtils;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.server.ServerHttpRequest;
+import org.springframework.http.server.ServerHttpResponse;
+import org.springframework.http.server.ServletServerHttpRequest;
 import org.springframework.messaging.Message;
 import org.springframework.messaging.MessageChannel;
 import org.springframework.messaging.simp.stomp.StompCommand;
@@ -1899,7 +1894,9 @@ import org.springframework.messaging.simp.stomp.StompHeaderAccessor;
 import org.springframework.messaging.support.ChannelInterceptor;
 import org.springframework.messaging.support.MessageHeaderAccessor;
 import org.springframework.stereotype.Component;
+import org.springframework.web.socket.WebSocketHandler;
 
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -1938,6 +1935,25 @@ public class WebSocketInterceptor implements ChannelInterceptor {
 
         return message;
     }
+
+    public boolean beforeHandshake(ServerHttpRequest request, ServerHttpResponse response,
+                                   WebSocketHandler wsHandler, Map<String, Object> attributes) throws Exception {
+        if (request instanceof ServletServerHttpRequest) {
+            HttpServletRequest servletRequest = ((ServletServerHttpRequest) request).getServletRequest();
+            // 从登录时设置的 Session 中获取用户
+            ChatUser user = (ChatUser) servletRequest.getSession().getAttribute("user");
+
+            if (user == null) {
+                log.warn("拒绝未登录用户的 WebSocket 连接请求");
+                return false; // 拒绝连接
+            }
+
+            // 将用户信息存入 WebSocket 会话属性
+            attributes.put("user", user);
+        }
+        return true;
+    }
+
 }
 
 ```
@@ -2096,6 +2112,21 @@ public class WebSocketEventListener {
 
 ---
 
+## 文件: xechat\src\main\java\cn\xeblog\xechat\mapper\ChatHistoryMapper.java
+```java
+package cn.xeblog.xechat.mapper;
+
+import cn.xeblog.xechat.entity.ChatHistory;
+import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import org.apache.ibatis.annotations.Mapper;
+
+@Mapper
+public interface ChatHistoryMapper extends BaseMapper<ChatHistory> {
+}
+```
+
+---
+
 ## 文件: xechat\src\main\java\cn\xeblog\xechat\mapper\ChatUserMapper.java
 ```java
 package cn.xeblog.xechat.mapper;
@@ -2116,6 +2147,7 @@ public interface ChatUserMapper extends BaseMapper<ChatUser> {
 package cn.xeblog.xechat.service;
 
 import cn.xeblog.xechat.domain.dto.ChatRecordDTO;
+import cn.xeblog.xechat.entity.ChatHistory;
 
 import java.util.HashMap;
 import java.util.List;
@@ -2142,6 +2174,12 @@ public interface ChatRecordService {
      * @return 聊天记录列表
      */
     List<HashMap<String, Object>> listRecord(String directoryName);
+    /**
+     * 从数据库获取最近的历史记录
+     * @param limit 查询条数
+     * @return 历史记录列表
+     */
+    List<ChatHistory> getDatabaseHistory(int limit);
 }
 
 ```
@@ -2157,13 +2195,9 @@ import com.baomidou.mybatisplus.extension.service.IService;
 
 public interface IUserService extends IService<ChatUser> {
     // 登录验证
-    ChatUser login(String email, String password);
-
+    ChatUser login(String username, String password);
     // 注册逻辑（含画像初始化）
     boolean register(ChatUser user);
-
-    // 【新增这行】检查邮箱是否存在
-    boolean checkEmailExists(String email);
 }
 ```
 
@@ -2292,14 +2326,17 @@ public interface UploadService {
 
 ## 文件: xechat\src\main\java\cn\xeblog\xechat\service\impl\ChatRecordServiceImpl.java
 ```java
-package cn.xeblog.xechat.service.impl;
+ package cn.xeblog.xechat.service.impl;
 
 import cn.xeblog.xechat.constant.DateConstant;
 import cn.xeblog.xechat.domain.dto.ChatRecordDTO;
 import cn.xeblog.xechat.domain.mo.User;
+import cn.xeblog.xechat.entity.ChatHistory;
 import cn.xeblog.xechat.enums.MessageTypeEnum;
+import cn.xeblog.xechat.mapper.ChatHistoryMapper; // 需要新建这个 Mapper
 import cn.xeblog.xechat.service.ChatRecordService;
 import cn.xeblog.xechat.utils.DateUtils;
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringEscapeUtils;
 import org.apache.commons.lang3.StringUtils;
@@ -2307,48 +2344,86 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
+import jakarta.annotation.Resource;
 import java.io.*;
+import java.time.LocalDateTime;
 import java.util.*;
 
-/**
- * @author yanpanyi
- * @date 2019/4/4
- */
 @Slf4j
 @Service
 public class ChatRecordServiceImpl implements ChatRecordService {
 
+    @Resource
+    private ChatHistoryMapper chatHistoryMapper; // 注入数据库操作接口
+
     @Value("${chatrecord.path}")
     private String path;
+
     @Value("${chatrecord.accessAddress}")
     private String accessAddress;
 
-    /**
-     * 生成的文件后缀
-     */
     private static final String FILE_SUFFIX = ".md";
 
     @Async
     @Override
     public void addRecord(ChatRecordDTO chatRecordDTO) {
+        log.info("准备存入数据库，当前用户ID: {}, 消息内容: {}",
+                chatRecordDTO.getUser().getUserId(), chatRecordDTO.getMessage());
+
+        if (null == chatRecordDTO || chatRecordDTO.getUser() == null) return;
+        if (chatRecordDTO.getType() == MessageTypeEnum.USER || chatRecordDTO.getType() == MessageTypeEnum.ROBOT) {
+            try {
+                String rawUserId = chatRecordDTO.getUser().getUserId();
+
+                // 增加校验：只有当 userId 是纯数字时才存入数据库
+                if (StringUtils.isNumeric(rawUserId)) {
+                    ChatHistory history = new ChatHistory();
+                    history.setUserId(Long.parseLong(rawUserId));
+                    history.setContent(chatRecordDTO.getMessage());
+                    history.setCreateTime(LocalDateTime.now());
+                    chatHistoryMapper.insert(history);
+                } else {
+                    log.warn("当前用户ID为非数字格式(UUID): {}，跳过数据库存储", rawUserId);
+                }
+            } catch (Exception e) {
+                log.error("数据库存储记录失败", e);
+            }
+        }
+
+        // 1. 持久化到数据库（新增逻辑）
+        // 仅记录用户或机器人发送的有效消息内容
+        if (chatRecordDTO.getType() == MessageTypeEnum.USER || chatRecordDTO.getType() == MessageTypeEnum.ROBOT) {
+            try {
+                ChatHistory history = new ChatHistory();
+                // 这里的 userId 需要从 User 对象获取，确保它是数据库中的 BIGINT id
+                history.setUserId(Long.parseLong(chatRecordDTO.getUser().getUserId()));
+                history.setContent(chatRecordDTO.getMessage());
+                history.setCreateTime(LocalDateTime.now());
+                chatHistoryMapper.insert(history);
+            } catch (Exception e) {
+                log.error("数据库存储聊天记录失败", e);
+            }
+        }
+
+        // 2. 原有的文件存储逻辑（保留作为备份）
+        saveToFile(chatRecordDTO);
+    }
+
+    /**
+     * 将原有的文件写入逻辑封装
+     */
+    private void saveToFile(ChatRecordDTO chatRecordDTO) {
         File file = new File(createFileName());
         if (!file.getParentFile().exists()) {
             file.getParentFile().mkdirs();
         }
 
-        try (BufferedWriter out = new BufferedWriter(new OutputStreamWriter(new FileOutputStream(file, true),
-                "UTF-8"))) {
+        try (BufferedWriter out = new BufferedWriter(new OutputStreamWriter(new FileOutputStream(file, true), "UTF-8"))) {
             out.write(formatContent(chatRecordDTO));
         } catch (IOException e) {
-            log.error("添加聊天记录异常，error ->", e);
+            log.error("添加文件记录异常", e);
         }
     }
-
-    /**
-     * 创建文件名
-     *
-     * @return 文件名
-     */
     private String createFileName() {
         Calendar calendar = Calendar.getInstance();
         StringBuffer sb = new StringBuffer();
@@ -2472,6 +2547,17 @@ public class ChatRecordServiceImpl implements ChatRecordService {
             sb.append(StringEscapeUtils.escapeHtml4(chatRecordDTO.getMessage()));
             sb.append("\r\n");
         }
+    }
+    @Override
+    public List<ChatHistory> getDatabaseHistory(int limit) {
+        // 查询最近的 limit 条记录，按时间倒序排
+        QueryWrapper<ChatHistory> wrapper = new QueryWrapper<>();
+        wrapper.orderByDesc("create_time").last("limit " + limit);
+
+        List<ChatHistory> list = chatHistoryMapper.selectList(wrapper);
+        // 转换成正序，方便前端从上往下显示
+        Collections.reverse(list);
+        return list;
     }
 }
 
@@ -2798,7 +2884,6 @@ import cn.xeblog.xechat.entity.ChatUser;
 import cn.xeblog.xechat.mapper.ChatUserMapper;
 import cn.xeblog.xechat.service.IUserService;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import org.springframework.stereotype.Service;
 
@@ -2807,7 +2892,7 @@ public class UserServiceImpl extends ServiceImpl<ChatUserMapper, ChatUser> imple
 
     @Override
     public ChatUser login(String email, String password) {
-        // 入参改为 email，保持见名知意
+        // 逻辑对齐：根据 email 字段查询用户
         return this.getOne(new LambdaQueryWrapper<ChatUser>()
                 .eq(ChatUser::getEmail, email)
                 .eq(ChatUser::getPassword, password));
@@ -2816,6 +2901,7 @@ public class UserServiceImpl extends ServiceImpl<ChatUserMapper, ChatUser> imple
     @Override
     public boolean register(ChatUser user) {
         // 1. 检查用户名是否存在
+        //注册查重逻辑也要改为 email
         long count = this.count(new LambdaQueryWrapper<ChatUser>()
                 .eq(ChatUser::getEmail, user.getEmail()));
         if (count > 0) return false;
@@ -2827,19 +2913,6 @@ public class UserServiceImpl extends ServiceImpl<ChatUserMapper, ChatUser> imple
 
         // 3. 执行保存（MyBatisPlusHandler 会自动填充时间）
         return this.save(user);
-    }
-    /**
-     * 实现检查邮箱是否存在的逻辑
-     */
-    @Override
-    public boolean checkEmailExists(String email) {
-        // 借助 MyBatis-Plus 的 QueryWrapper 直接查询数据库
-        QueryWrapper<ChatUser> queryWrapper = new QueryWrapper<>();
-        // 相当于生成 SQL: SELECT count(*) FROM chat_user WHERE email = ?
-        queryWrapper.eq("email", email);
-
-        // 如果查出来的数量大于 0，说明邮箱已被注册，返回 true
-        return this.count(queryWrapper) > 0;
     }
 }
 ```
